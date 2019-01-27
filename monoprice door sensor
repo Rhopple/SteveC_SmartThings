@@ -1,0 +1,502 @@
+1 /** 
+2  *  Monoprice Z-Wave Plus Door/Window Sensor 1.2 
+3  *  (P/N 15270) 
+4  * 
+5  *  Author:  
+6  *    Kevin LaFramboise (krlaframboise) 
+7  * 
+8  *  URL to documentation:  https://community.smartthings.com/t/release-monoprice-z-wave-plus-door-window-sensor/70478 
+9  *     
+10  * 
+11  *  Changelog: 
+12  * 
+13  *    1.2 (07/23/2017) 
+14  *    	- Removed sendhubaction workaround. 
+15  *    	- Switched to new SmartThings color theme 
+16  *    	- Misc minor code enhancements/cleanup. 
+17  * 
+18  *    1.1.4 (04/23/2017) 
+19  *    	- SmartThings broke parse method response handling so switched to sendhubaction. 
+20  * 
+21  *    1.1.3 (04/20/2017) 
+22  *      - Added workaround for ST Health Check bug. 
+23  * 
+24  *    1.1.2 (03/12/2017) 
+25  *      - Adjusted health check to allow it to skip a checkin before going offline. 
+26  * 
+27  *    1.1 (02/18/2017) 
+28  *      - Added Health Check support. 
+29  * 
+30  *    1.0 (12/29/2016) 
+31  *      - Initial Release 
+32  * 
+33  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except 
+34  *  in compliance with the License. You may obtain a copy of the License at: 
+35  * 
+36  *      http://www.apache.org/licenses/LICENSE-2.0 
+37  * 
+38  *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed 
+39  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License 
+40  *  for the specific language governing permissions and limitations under the License. 
+41  * 
+42  */ 
+43 metadata { 
+44 	definition ( 
+45 		name: "Monoprice Z-Wave Plus Door/Window Sensor",  
+46 		namespace: "krlaframboise",  
+47 		author: "Kevin LaFramboise" 
+48 	) { 
+49 		capability "Sensor" 
+50 		capability "Contact Sensor" 
+51 		capability "Configuration" 
+52 		capability "Battery" 
+53 		capability "Tamper Alert" 
+54 		capability "Refresh" 
+55 		capability "Health Check" 
+56 
+ 
+57 		attribute "lastCheckin", "string" 
+58 			 
+59 		fingerprint mfr:"0109", prod:"2001", model:"0106", deviceJoinName: "Monoprice Door/Window Sensor" 
+60 	} 
+61 	 
+62 	simulator { } 
+63 	 
+64 	preferences { 
+65 		input "checkinInterval", "number", 
+66 			title: "Minimum Check-in Interval (Hours)", 
+67 			defaultValue: 4, 
+68 			range: "1..167", 
+69 			displayDuringSetup: true,  
+70 			required: false 
+71 		input "reportBatteryEvery", "number",  
+72 			title: "Battery Reporting Interval (Hours)",  
+73 			description: "This setting can't be less than the Minimum Check-in Interval.", 
+74 			defaultValue: 6, 
+75 			range: "1..167", 
+76 			displayDuringSetup: true,  
+77 			required: false 
+78 		input "enableExternalSensor", "bool",  
+79 			title: "Enable External Sensor?", 
+80 			description: "The Monoprice Door/Window Sensor includes terminals that allow you to attach an external sensor.", 
+81 			defaultValue: false, 
+82 			displayDuringSetup: true,  
+83 			required: false 
+84 		input "autoClearTamper", "bool",  
+85 			title: "Automatically Clear Tamper?", 
+86 			description: "The tamper detected event is raised when the device is opened.  This setting allows you to decide whether or not to have the clear event automatically raised when the device closes.", 
+87 			defaultValue: false, 
+88 			displayDuringSetup: true,  
+89 			required: false 
+90 		input "debugOutput", "bool",  
+91 			title: "Enable debug logging?",  
+92 			defaultValue: true,  
+93 			displayDuringSetup: true,  
+94 			required: false 
+95 	} 
+96 
+ 
+97 	tiles(scale: 2) { 
+98 		multiAttributeTile(name:"contact", type: "generic", width: 6, height: 4, canChangeIcon: true){ 
+99 			tileAttribute ("device.contact", key: "PRIMARY_CONTROL") { 
+100 				attributeState "closed",  
+101 					label:'closed',  
+102 					icon:"st.contact.contact.closed",  
+103 					backgroundColor:"#00a0dc" 
+104 				attributeState "open",  
+105 					label:'open',  
+106 					icon:"st.contact.contact.open",  
+107 					backgroundColor:"#e86d13" 
+108 			} 
+109 		} 
+110 		 
+111 		valueTile("battery", "device.battery", decoration: "flat", width: 2, height: 2){ 
+112 			state "battery", label:'${currentValue}% battery', unit:"" 
+113 		}		 
+114 		 
+115 		standardTile("tampering", "device.tamper", width: 2, height: 2) { 
+116 			state "detected", label:"Tamper", backgroundColor: "#e86d13" 
+117 			state "clear", label:"No Tamper", backgroundColor: "#ffffff"			 
+118 		} 
+119 	 
+120 		standardTile("refresh", "device.refresh", width: 2, height: 2) { 
+121 			state "default", label: "Refresh", action: "refresh", icon:"st.secondary.refresh-icon" 
+122 		} 
+123 		 
+124 		main("contact") 
+125 		details(["contact", "battery", "tampering", "refresh"]) 
+126 	} 
+127 } 
+128 
+ 
+129 def updated() {	 
+130 	// This method always gets called twice when preferences are saved. 
+131 	if (!isDuplicateCommand(state.lastUpdated, 3000)) { 
+132 		state.lastUpdated = new Date().time 
+133 		logTrace "updated()" 
+134 		 
+135 		if (state.checkinInterval != settings?.checkinInterval || state.enableExternalSensor != settings?.enableExternalSensor) { 
+136 			state.pendingChanges = true 
+137 		} 
+138 	}	 
+139 } 
+140 
+ 
+141 def configure() {	 
+142 	logTrace "configure()" 
+143 	def cmds = [] 
+144 	 
+145 	if (!device.currentValue("contact")) { 
+146 		sendEvent(createEventMap("contact", "open", false)) 
+147 	} 
+148 	 
+149 	if (!state.isConfigured) { 
+150 		logTrace "Waiting 1 second because this is the first time being configured" 
+151 		// Give inclusion time to finish. 
+152 		cmds << "delay 1000"			 
+153 	} 
+154 	 
+155 	initializeCheckin() 
+156 		 
+157 	cmds += delayBetween([ 
+158 		wakeUpIntervalSetCmd(checkinIntervalSettingSeconds), 
+159 		externalSensorConfigSetCmd(settings?.enableExternalSensor ?: false), 
+160 		externalSensorConfigGetCmd(), 
+161 		batteryGetCmd() 
+162 	], 100) 
+163 		 
+164 	logDebug "Sending configuration to device." 
+165 	return cmds 
+166 } 
+167 
+ 
+168 private initializeCheckin() { 
+169 	// Set the Health Check interval so that it can be skipped twice plus 5 minutes. 
+170 	def checkInterval = ((checkinIntervalSettingSeconds * 3) + (5 * 60)) 
+171 	 
+172 	sendEvent(name: "checkInterval", value: checkInterval, displayed: false, data: [protocol: "zwave", hubHardwareId: device.hub.hardwareID]) 
+173 } 
+174 
+ 
+175 // Required for HealthCheck Capability, but doesn't actually do anything because this device sleeps. 
+176 def ping() { 
+177 	logDebug "ping()"	 
+178 } 
+179 
+ 
+180 private getCheckinIntervalSetting() { 
+181 	return (settings?.checkinInterval ?: 6) 
+182 } 
+183 
+ 
+184 private getCheckinIntervalSettingSeconds() { 
+185 	return (checkinIntervalSetting * 60 * 60) 
+186 } 
+187 				 
+188 def parse(String description) { 
+189 	def result = [] 
+190 	def cmd = zwave.parse(description, commandClassVersions) 
+191 	if (cmd) { 
+192 		result += zwaveEvent(cmd) 
+193 	} 
+194 	else { 
+195 		logDebug "Unable to parse description: $description" 
+196 	} 
+197 	 
+198 	if (!isDuplicateCommand(state.lastCheckinTime, 60000)) { 
+199 		state.lastCheckinTime = new Date().time	 
+200 		result << createLastCheckinEvent() 
+201 	} 
+202 	return result 
+203 } 
+204 
+ 
+205 private createLastCheckinEvent() { 
+206 	logDebug "Device Checked In"	 
+207 	return createEvent(createEventMap("lastCheckin", convertToLocalTimeString(new Date()), false)) 
+208 } 
+209 
+ 
+210 def zwaveEvent(physicalgraph.zwave.commands.securityv1.SecurityMessageEncapsulation cmd) { 
+211 	def result = [] 
+212 	def encapCmd = cmd.encapsulatedCommand(commandClassVersions) 
+213 	if (encapCmd) { 
+214 		result += zwaveEvent(encapCmd) 
+215 	} 
+216 	else { 
+217 		log.warn "Unable to extract encapsulated cmd from $cmd"	 
+218 	} 
+219 	return result 
+220 } 
+221 
+ 
+222 private getCommandClassVersions() { 
+223 	[ 
+224 		0x20: 1,  // Basic 
+225 		0x59: 1,  // AssociationGrpInfo 
+226 		0x5A: 1,  // DeviceResetLocally 
+227 		0x5E: 2,  // ZwaveplusInfo 
+228 		0x70: 1,  // Configuration 
+229 		0x71: 3,  // Alarm v1 or Notification v4 
+230 		0x72: 2,  // ManufacturerSpecific*= 
+231 		0x73: 1,  // Powerlevel 
+232 		0x7A: 2,  // FirmwareUpdateMd 
+233 		0x80: 1,  // Battery 
+234 		0x84: 2,  // WakeUp 
+235 		0x85: 2,  // Association 
+236 		0x86: 1,  // Version (2) 
+237 		0x98: 1		// Security 
+238 	] 
+239 } 
+240 
+ 
+241 def zwaveEvent(physicalgraph.zwave.commands.wakeupv2.WakeUpNotification cmd) { 
+242 	logTrace "WakeUpNotification: $cmd" 
+243 	def cmds = [] 
+244 	 
+245 	if (canSendConfiguration()) { 
+246 		cmds += configure() 
+247 	} 
+248 	else if (canReportBattery()) { 
+249 		cmds << batteryGetCmd() 
+250 	} 
+251 	else { 
+252 		logTrace "Skipping battery check because it was already checked within the last $reportEveryHours hours." 
+253 	} 
+254 	 
+255 	if (cmds) { 
+256 		cmds << "delay 5000" 
+257 	} 
+258 	 
+259 	cmds << wakeUpNoMoreInfoCmd() 
+260 	return response(cmds) 
+261 } 
+262 
+ 
+263 private canReportBattery() { 
+264 	def reportEveryHours = settings?.reportBatteryEvery ?: 6 
+265 	def reportEveryMS = (reportEveryHours * 60 * 60 * 1000) 
+266 		 
+267 	return (!state.lastBatteryReport || ((new Date().time) - state.lastBatteryReport > reportEveryMS))  
+268 } 
+269 
+ 
+270 def zwaveEvent(physicalgraph.zwave.commands.batteryv1.BatteryReport cmd) { 
+271 	def val = (cmd.batteryLevel == 0xFF ? 1 : cmd.batteryLevel) 
+272 	if (val > 100) { 
+273 		val = 100 
+274 	} 
+275 	else if (val < 1) { 
+276 		val = 1 
+277 	} 
+278 	state.lastBatteryReport = new Date().time	 
+279 	[ 
+280 		createEvent(createEventMap("battery", val, null, "%")) 
+281 	] 
+282 }	 
+283 
+ 
+284 def zwaveEvent(physicalgraph.zwave.commands.configurationv1.ConfigurationReport cmd) { 
+285 	logTrace "ConfigurationReport: $cmd" 
+286 	def parameterName 
+287 	switch (cmd.parameterNumber) { 
+288 		case 1: 
+289 			state.enableExternalSensor = (cmd.configurationValue[0] == 0xFF) 
+290 			logDebug "External Sensor Enabled: ${state.enableExternalSensor}" 
+291 			break 
+292 		default:	 
+293 			parameterName = "Parameter #${cmd.parameterNumber}" 
+294 	}		 
+295 	if (parameterName) { 
+296 		logDebug "${parameterName}: ${cmd.configurationValue}" 
+297 	}  
+298 	state.isConfigured = true 
+299 	state.pendingRefresh = false 
+300 	state.pendingChanges = false 
+301 	state.checkinInterval = checkinIntervalSetting 
+302 	return [] 
+303 } 
+304 
+ 
+305 def zwaveEvent(physicalgraph.zwave.commands.basicv1.BasicReport cmd) { 
+306 	logTrace "BasicReport: $cmd"	 
+307 	return [] 
+308 } 
+309 
+ 
+310 def zwaveEvent(physicalgraph.zwave.commands.basicv1.BasicSet cmd) { 
+311 	logTrace "Basic Set: $cmd"	 
+312 	return [] 
+313 } 
+314 
+ 
+315 
+ 
+316 def zwaveEvent(physicalgraph.zwave.commands.notificationv3.NotificationReport cmd) { 
+317 	def result = []	 
+318 	logTrace "NotificationReport: $cmd" 
+319 	if (cmd.notificationType == 0x06) { 
+320 		result += handleContactEvent(cmd.event) 
+321 	} 
+322 	else if (cmd.notificationType == 0x07) {		 
+323 		result += handleTamperEvent(cmd.event) 
+324 	} 
+325 	return result 
+326 } 
+327 
+ 
+328 def zwaveEvent(physicalgraph.zwave.Command cmd) { 
+329 	logDebug "Unhandled Command: $cmd" 
+330 	return [] 
+331 } 
+332 
+ 
+333 private handleContactEvent(event) { 
+334 	def result = [] 
+335 	def val 
+336 	if (event == 0xFF || event == 0x16) { 
+337 		val = "open" 
+338 	} 
+339 	else if(event == 0 || event == 0x17) { 
+340 		val = "closed" 
+341 	} 
+342 	if (val) { 
+343 		result << createEvent(createEventMap("contact", val)) 
+344 	} 
+345 	return result 
+346 } 
+347 
+ 
+348 private handleTamperEvent(event) { 
+349 	def result = [] 
+350 	def val 
+351 	if (event == 0x03) { 
+352 		val = "detected" 
+353 	} 
+354 	else if (event == 0) { 
+355 		if (settings?.autoClearTamper) { 
+356 			val = "clear" 
+357 		} 
+358 		else { 
+359 			logDebug "Tamper is Clear" 
+360 		} 
+361 	} 
+362 	if (val) { 
+363 		result << createEvent(createEventMap("tamper", val)) 
+364 	} 
+365 	return result 
+366 } 
+367 
+ 
+368 // Resets the tamper attribute to clear and requests the device to be refreshed. 
+369 def refresh() {	 
+370 	if (device.currentValue("tamper") != "clear") { 
+371 		sendEvent(createEventMap("tamper", "clear", false)) 
+372 	} 
+373 	else { 
+374 		logDebug "The configuration and attributes will be refresh the next time the device wakes up.  If you want this to happen immediately, open the back cover of the device, wait until the red light turns solid, and then put the cover back on." 
+375 		state.pendingRefresh = true 
+376 	} 
+377 } 
+378 
+ 
+379 def createEventMap(eventName, newVal, displayed=null, unit=null) { 
+380 	if (displayed == null) { 
+381 		displayed = (device.currentValue(eventName) != newVal) 
+382 	} 
+383 	if (displayed) { 
+384 		logDebug "${eventName.capitalize()} is ${newVal}" 
+385 	} 
+386 	def eventMap = [ 
+387 		name: eventName,  
+388 		value: newVal,  
+389 		displayed: displayed, 
+390 		isStateChange: true 
+391 	] 
+392 	if (unit) { 
+393 		eventMap.unit = unit 
+394 	} 
+395 	return eventMap 
+396 } 
+397 
+ 
+398 private wakeUpIntervalSetCmd(val) { 
+399 	logTrace "wakeUpIntervalSetCmd(${val})" 
+400 	return secureCmd(zwave.wakeUpV2.wakeUpIntervalSet(seconds:val, nodeid:zwaveHubNodeId)) 
+401 } 
+402 
+ 
+403 private wakeUpNoMoreInfoCmd() { 
+404 	return secureCmd(zwave.wakeUpV2.wakeUpNoMoreInformation()) 
+405 } 
+406 
+ 
+407 private batteryGetCmd() { 
+408 	logTrace "Requesting battery report" 
+409 	return secureCmd(zwave.batteryV1.batteryGet()) 
+410 } 
+411 
+ 
+412 private externalSensorConfigGetCmd() { 
+413 	return configGetCmd(1) 
+414 } 
+415 
+ 
+416 private externalSensorConfigSetCmd(isEnabled) { 
+417 	return configSetCmd(1, 1, (isEnabled ? 0xFF : 0x00)) 
+418 } 
+419 
+ 
+420 private configSetCmd(paramNumber, valSize, val) {	 
+421 	logTrace "Setting configuration param #${paramNumber} to ${val}" 
+422 	return secureCmd(zwave.configurationV1.configurationSet(parameterNumber: paramNumber, size: valSize, configurationValue: [val])) 
+423 } 
+424 
+ 
+425 private configGetCmd(paramNumber) { 
+426 	logTrace "Requesting configuration report for param #${paramNumber}" 
+427 	return secureCmd(zwave.configurationV1.configurationGet(parameterNumber: paramNumber)) 
+428 } 
+429 
+ 
+430 private secureCmd(cmd) { 
+431 	if (zwaveInfo?.zw?.contains("s") || ("0x98" in device.rawDescription?.split(" "))) { 
+432 		return zwave.securityV1.securityMessageEncapsulation().encapsulate(cmd).format() 
+433 	} 
+434 	else { 
+435 		return cmd.format() 
+436 	}	 
+437 } 
+438 
+ 
+439 private canSendConfiguration() { 
+440 	return (!state.isConfigured || state.pendingRefresh != false	|| state.pendingChanges != false) 
+441 } 
+442 
+ 
+443 private convertToLocalTimeString(dt) { 
+444 	def timeZoneId = location?.timeZone?.ID 
+445 	if (timeZoneId) { 
+446 		return dt.format("MM/dd/yyyy hh:mm:ss a", TimeZone.getTimeZone(timeZoneId)) 
+447 	} 
+448 	else { 
+449 		return "$dt" 
+450 	}	 
+451 } 
+452 
+ 
+453 private isDuplicateCommand(lastExecuted, allowedMil) { 
+454 	!lastExecuted ? false : (lastExecuted + allowedMil > new Date().time)  
+455 } 
+456 
+ 
+457 private logDebug(msg) { 
+458 	if (settings?.debugOutput || settings?.debugOutput == null) { 
+459 		log.debug "$msg" 
+460 	} 
+461 } 
+462 
+ 
+463 private logTrace(msg) { 
+464 	// log.trace "$msg" 
+465 }
